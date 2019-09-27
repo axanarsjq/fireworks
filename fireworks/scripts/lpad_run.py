@@ -50,7 +50,7 @@ def pw_check(ids, args, skip_pw=False):
         m_password = datetime.datetime.now().strftime('%Y-%m-%d')
         if not args.password:
             if input('Are you sure? This will modify {} entries. (Y/N)'.format(len(ids)))[0].upper() == 'Y':
-                args.password=datetime.datetime.now().strftime('%Y-%m-%d')
+                args.password = datetime.datetime.now().strftime('%Y-%m-%d')
             else:
                 raise ValueError('Operation aborted by user.')
         if args.password != m_password:
@@ -102,15 +102,18 @@ def parse_helper(lp, args, wf_mode=False, skip_pw=False):
 
 def get_lp(args):
     try:
-        if not args.launchpad_file and os.path.exists(os.path.join(args.config_dir, DEFAULT_LPAD_YAML)):
-            args.launchpad_file = os.path.join(args.config_dir, DEFAULT_LPAD_YAML)
+        if not args.launchpad_file:
+            if os.path.exists(os.path.join(args.config_dir, DEFAULT_LPAD_YAML)):
+                args.launchpad_file = os.path.join(args.config_dir, DEFAULT_LPAD_YAML)
+            else:
+                args.launchpad_file = LAUNCHPAD_LOC
 
         if args.launchpad_file:
             return LaunchPad.from_file(args.launchpad_file)
         else:
             args.loglvl = 'CRITICAL' if args.silencer else args.loglvl
             return LaunchPad(logdir=args.logdir, strm_lvl=args.loglvl)
-    except:
+    except Exception:
         traceback.print_exc()
         err_message = 'FireWorks was not able to connect to MongoDB. Is the server running? ' \
                       'The database file specified was {}.'.format(args.launchpad_file)
@@ -122,20 +125,42 @@ def get_lp(args):
 
 
 def init_yaml(args):
-    fields = (
-        ("host", "localhost"),
-        ("port", 27017),
-        ("name", "fireworks"),
-        ("username", None),
-        ("password", None),
-        ("ssl_ca_file", None))
+    if args.uri_mode:
+        fields = (
+            ("host", None, "Example: mongodb+srv://USER:PASSWORD@CLUSTERNAME.mongodb.net/fireworks"),
+            ("ssl_ca_file", None, "Path to any client certificate to be used for mongodb connection"),
+            ("authsource", None,
+             "Database used for authentication, if not connection db. e.g., for MongoDB Atlas this is sometimes "
+             "'admin'."))
+    else:
+        fields = (
+            ("host", "localhost", "Example: 'localhost' or 'mongodb+srv://CLUSTERNAME.mongodb.net'"),
+            ("port", 27017, ""),
+            ("name", "fireworks", "Database under which to store the fireworks collections"),
+            ("username", None, "Username for MongoDB authentication"),
+            ("password", None, "Password for MongoDB authentication"),
+            ("ssl_ca_file", None, "Path to any client certificate to be used for Mongodb connection"),
+            ("authsource", None,
+             "Database used for authentication, if not connection db. e.g., for MongoDB Atlas this is sometimes "
+             "'admin'."))
+
     doc = {}
+    if args.uri_mode:
+        print(
+            "Note 1: You are in URI format mode. This means that all database parameters (username, password, host, "
+            "port, database name, etc.) must be present in the URI. See: "
+            "https://docs.mongodb.com/manual/reference/connection-string/ for details.")
+        print("(Enter your connection URI in under the 'host' parameter)")
     print("Please supply the following configuration values")
     print("(press Enter if you want to accept the defaults)\n")
-    for k, v in fields:
-        val = input("Enter {} (default: {}) : ".format(k, v))
-        doc[k] = val if val else v
-    doc["port"] = int(doc["port"])  # enforce the port as an int
+    for k, default, helptext in fields:
+        val = input("Enter {} parameter. (default: {}). {}: ".format(k, default, helptext))
+        doc[k] = val if val else default
+    if "port" in doc:
+        doc["port"] = int(doc["port"])  # enforce the port as an int
+    if args.uri_mode:
+        doc["uri_mode"] = True
+
     lp = LaunchPad.from_dict(doc)
     lp.to_file(args.config_file)
     print("\nConfiguration written to {}!".format(args.config_file))
@@ -146,7 +171,7 @@ def reset(args):
     if not args.password:
         if input('Are you sure? This will RESET {} workflows and all data. (Y/N)'.format(
                 lp.workflows.count()))[0].upper() == 'Y':
-            args.password=datetime.datetime.now().strftime('%Y-%m-%d')
+            args.password = datetime.datetime.now().strftime('%Y-%m-%d')
         else:
             raise ValueError('Operation aborted by user.')
     lp.reset(args.password)
@@ -265,7 +290,7 @@ def get_fws(args):
 def update_fws(args):
     lp = get_lp(args)
     fw_ids = parse_helper(lp, args)
-    lp.update_spec(fw_ids, json.loads(args.update),args.mongo)
+    lp.update_spec(fw_ids, json.loads(args.update), args.mongo)
 
 
 def get_wfs(args):
@@ -306,17 +331,17 @@ def get_wfs(args):
             d["name"] += "--%d" % i
             wfs.append(d)
 
-    if len(wfs) == 1:
-        wfs = wfs[0]
-
     if args.table:
-        headers = list(wfs[0].keys())
-        from prettytable import PrettyTable
-        t = PrettyTable(headers)
-        for d in wfs:
-            t.add_row([d.get(k) for k in headers])
-        print(t)
+        if wfs:
+            headers = list(wfs[0].keys())
+            from prettytable import PrettyTable
+            t = PrettyTable(headers)
+            for d in wfs:
+                t.add_row([d.get(k) for k in headers])
+            print(t)
     else:
+        if len(wfs) == 1:
+            wfs = wfs[0]
         print(args.output(wfs))
 
 
@@ -343,9 +368,10 @@ def get_children(links, start, max_depth):
 def detect_lostruns(args):
     lp = get_lp(args)
     query = ast.literal_eval(args.query) if args.query else None
+    launch_query = ast.literal_eval(args.launch_query) if args.launch_query else None
     fl, ff, fi = lp.detect_lostruns(expiration_secs=args.time, fizzle=args.fizzle, rerun=args.rerun,
                                     max_runtime=args.max_runtime, min_runtime=args.min_runtime,
-                                    refresh=args.refresh, query=query)
+                                    refresh=args.refresh, query=query, launch_query=launch_query)
     lp.m_logger.debug('Detected {} lost launches: {}'.format(len(fl), fl))
     lp.m_logger.info('Detected {} lost FWs: {}'.format(len(ff), ff))
     lp.m_logger.info('Detected {} inconsistent FWs: {}'.format(len(fi), fi))
@@ -378,6 +404,7 @@ def defuse_wfs(args):
         lp.m_logger.info('Note: FIZZLED and COMPLETED FWs were not defused. '
                          'Use the --defuse_all_states option to force this (or rerun FIZZLED FWs first).')
 
+
 def pause_wfs(args):
     lp = get_lp(args)
     fw_ids = parse_helper(lp, args, wf_mode=True)
@@ -385,6 +412,7 @@ def pause_wfs(args):
         lp.pause_wf(f)
         lp.m_logger.debug('Processed fw_id: {}'.format(f))
     lp.m_logger.info('Finished defusing {} FWs.'.format(len(fw_ids)))
+
 
 def archive(args):
     lp = get_lp(args)
@@ -412,6 +440,7 @@ def defuse_fws(args):
         lp.m_logger.debug('Processed fw_id: {}'.format(f))
     lp.m_logger.info('Finished defusing {} FWs'.format(len(fw_ids)))
 
+
 def pause_fws(args):
     lp = get_lp(args)
     fw_ids = parse_helper(lp, args)
@@ -419,6 +448,7 @@ def pause_fws(args):
         lp.pause_fw(f)
         lp.m_logger.debug('Processed fw_id: {}'.format(f))
     lp.m_logger.info('Finished pausing {} FWs'.format(len(fw_ids)))
+
 
 def reignite_fws(args):
     lp = get_lp(args)
@@ -444,11 +474,11 @@ def rerun_fws(args):
     if args.task_level:
         launch_ids = args.launch_id
         if launch_ids is None:
-            launch_ids = ['last']*len(fw_ids)
+            launch_ids = ['last'] * len(fw_ids)
         elif len(launch_ids) != len(fw_ids):
             raise ValueError("Specify the same number of tasks and launches")
     else:
-        launch_ids = [None]*len(fw_ids)
+        launch_ids = [None] * len(fw_ids)
     for f, l in zip(fw_ids, launch_ids):
         lp.rerun_fw(int(f), recover_launch=l, recover_mode=args.recover_mode)
         lp.m_logger.debug('Processed fw_id: {}'.format(f))
@@ -485,13 +515,20 @@ def get_qid(args):
 def cancel_qid(args):
     lp = get_lp(args)
     lp.m_logger.warning("WARNING: cancel_qid does not actually remove jobs from the queue "
-                     "(e.g., execute qdel), this must be done manually!")
+                        "(e.g., execute qdel), this must be done manually!")
     lp.cancel_reservation_by_reservation_id(args.qid)
 
 
 def set_priority(args):
+    wf_mode = args.wf
     lp = get_lp(args)
-    fw_ids = parse_helper(lp, args)
+    fw_ids = parse_helper(lp, args, wf_mode=wf_mode)
+    if wf_mode:
+        all_fw_ids = set()
+        for fw_id in fw_ids:
+            wf = lp.get_wf_by_fw_id_lzyfw(fw_id)
+            all_fw_ids.update(wf.id_fw.keys())
+        fw_ids = list(all_fw_ids)
     for f in fw_ids:
         lp.set_priority(f, args.priority)
         lp.m_logger.debug("Processed fw_id {}".format(f))
@@ -551,7 +588,7 @@ def add_scripts(args):
     for idx, s in enumerate(args.scripts):
         fws.append(Firework(ScriptTask({'script': s, 'use_shell': True}), name=args.names[idx], fw_id=idx))
         if idx != 0:
-            links[idx-1] = idx
+            links[idx - 1] = idx
 
     lp.add_wf(Workflow(fws, links, args.wf_name))
 
@@ -563,7 +600,7 @@ def recover_offline(args):
     recovered_fws = []
 
     for l in lp.offline_runs.find({"completed": False, "deprecated": False},
-                                  {"launch_id": 1, "fw_id":1}):
+                                  {"launch_id": 1, "fw_id": 1}):
         if fworker_name and lp.launches.count({"launch_id": l["launch_id"],
                                                "fworker.name": fworker_name}) == 0:
             continue
@@ -589,7 +626,7 @@ def forget_offline(args):
 
 
 def report(args):
-    lp=get_lp(args)
+    lp = get_lp(args)
     query = ast.literal_eval(args.query) if args.query else None
     fwr = FWReport(lp)
     stats = fwr.get_stats(coll=args.collection, interval=args.interval,
@@ -604,7 +641,7 @@ def report(args):
 
 def introspect(args):
     print("NOTE: This feature is in beta mode...")
-    lp=get_lp(args)
+    lp = get_lp(args)
     isp = Introspector(lp)
     for coll in ['launches', 'tasks', 'fireworks', 'workflows']:
         print('generating report for {}...please wait...'.format(coll))
@@ -659,7 +696,7 @@ def get_output_func(format):
         return lambda x: json.dumps(x, default=DATETIME_HANDLER, indent=4)
     else:
         return lambda x: yaml.safe_dump(recursive_dict(x, preserve_unicode=False),
-                                   default_flow_style=False)
+                                        default_flow_style=False)
 
 
 def arg_positive_int(value):
@@ -718,6 +755,10 @@ def lpad():
 
     init_parser = subparsers.add_parser(
         'init', help='Initialize a Fireworks launchpad YAML file.')
+    init_parser.add_argument('-u', '--uri_mode',
+                             action="store_true",
+                             help="Connect via a URI, see: "
+                                  "https://docs.mongodb.com/manual/reference/connection-string/")
     init_parser.add_argument('--config-file', default=DEFAULT_LPAD_YAML,
                              type=str,
                              help="Filename to write to.")
@@ -736,25 +777,38 @@ def lpad():
                                    "paths given by wf_file.")
     addwf_parser.add_argument('wf_file', nargs="+",
                               help="Path to a Firework or Workflow file")
-    addwf_parser.add_argument('-c', '--check', help='check the workflow before adding', dest='check', action='store_true')
+    addwf_parser.add_argument('-c', '--check', help='check the workflow before adding', dest='check',
+                              action='store_true')
     addwf_parser.set_defaults(func=add_wf, check=False)
 
     check_wf_parser = subparsers.add_parser('check_wflow', help='validate and graph a workflow from launchpad')
     check_wf_parser.add_argument('-i', '--fw_id', type=int, help='the id of a firework from the workflow')
-    check_wf_parser.add_argument('-g', '--graph', type=str, help='graph the workflow in DOT format; allowed views: dataflow, controlflow, combined.', dest='view', default=None)
-    check_wf_parser.add_argument('-f', '--dot_file', help='path to store the workflow graph, default: workflow.dot', default='workflow.dot')
+    check_wf_parser.add_argument('-g', '--graph', type=str,
+                                 help='graph the workflow in DOT format; allowed views: dataflow, controlflow, '
+                                      'combined.',
+                                 dest='view', default=None)
+    check_wf_parser.add_argument('-f', '--dot_file', help='path to store the workflow graph, default: workflow.dot',
+                                 default='workflow.dot')
     check_wf_parser.set_defaults(func=check_wf, control_flow=False, data_flow=False)
 
-    get_launchdir_parser = subparsers.add_parser('get_launchdir', help='get the directory of the most recent launch of the given fw_id. A common usage is "cd `get_launchdir <FW_ID>`" to change the working directory that of the FW launch')
+    get_launchdir_parser = subparsers.add_parser('get_launchdir',
+                                                 help='get the directory of the most recent launch of the given fw_id.'
+                                                      ' A common usage is "cd `get_launchdir <FW_ID>`" to change the '
+                                                      'working directory that of the FW launch')
     get_launchdir_parser.add_argument('fw_id', type=int, help='fw_id to chdir to')
-    get_launchdir_parser.add_argument('--launch_idx', type=int, help='the index of the launch to get (default of -1 is most recent launch)', default=-1)
+    get_launchdir_parser.add_argument('--launch_idx', type=int,
+                                      help='the index of the launch to get (default of -1 is most recent launch)',
+                                      default=-1)
     get_launchdir_parser.set_defaults(func=get_launchdir)
 
-    append_wf_parser = subparsers.add_parser('append_wflow', help='append a workflow from file to a workflow on launchpad')
+    append_wf_parser = subparsers.add_parser('append_wflow',
+                                             help='append a workflow from file to a workflow on launchpad')
     append_wf_parser.add_argument(*fw_id_args, type=fw_id_kwargs["type"], help='parent firework ids')
     append_wf_parser.add_argument('-f', '--wf_file', help='path to a firework or workflow file')
-    append_wf_parser.add_argument('-d', '--detour', help='append workflow as a detour', dest='detour', action='store_true')
-    append_wf_parser.add_argument('--no_pull_spec_mods', help='do not to pull spec mods from parent', dest='pull_spec_mods', action='store_false')
+    append_wf_parser.add_argument('-d', '--detour', help='append workflow as a detour', dest='detour',
+                                  action='store_true')
+    append_wf_parser.add_argument('--no_pull_spec_mods', help='do not to pull spec mods from parent',
+                                  dest='pull_spec_mods', action='store_false')
     append_wf_parser.set_defaults(func=append_wf, detour=False, pull_spec_mods=True)
 
     dump_wf_parser = subparsers.add_parser('dump_wflow', help='dump a workflow from launchpad to a file')
@@ -840,8 +894,11 @@ def lpad():
     pause_fw_parser.add_argument(*state_args, **state_kwargs)
     pause_fw_parser.add_argument(*query_args, **query_kwargs)
     pause_fw_parser.add_argument(*launches_mode_args, **launches_mode_kwargs)
+    pause_fw_parser.add_argument('--password', help="Today's date, e.g. 2012-02-25. "
+                                                    "Password or positive response to input "
+                                                    "prompt required when modifying more than {} "
+                                                    "entries.".format(PW_CHECK_NUM))
     pause_fw_parser.set_defaults(func=pause_fws)
-
 
     reignite_fw_parser = subparsers.add_parser('reignite_fws', help='reignite (un-cancel) a set of Fireworks')
     reignite_fw_parser.add_argument(*fw_id_args, **fw_id_kwargs)
@@ -862,9 +919,9 @@ def lpad():
     resume_fw_parser.add_argument(*query_args, **query_kwargs)
     resume_fw_parser.add_argument(*launches_mode_args, **launches_mode_kwargs)
     resume_fw_parser.add_argument('--password', help="Today's date, e.g. 2012-02-25. "
-                                                       "Password or positive response to input "
-                                                       "prompt required when modifying more than {} "
-                                                       "entries.".format(PW_CHECK_NUM))
+                                                     "Password or positive response to input "
+                                                     "prompt required when modifying more than {} "
+                                                     "entries.".format(PW_CHECK_NUM))
     resume_fw_parser.set_defaults(func=resume_fws)
 
     update_fws_parser = subparsers.add_parser(
@@ -878,7 +935,7 @@ def lpad():
                                    help='Doc update (enclose pymongo-style dict '
                                         'in single-quotes, e.g. \'{'
                                         '"_tasks.1.hello": "world"}\')')
-    update_fws_parser.add_argument("--mongo",default=False, action='store_true',
+    update_fws_parser.add_argument("--mongo", default=False, action='store_true',
                                    help="Use full pymongo style dict to modify spec. "
                                         "Be very careful as you can break your spec")
     update_fws_parser.add_argument('--password', help="Today's date, e.g. 2012-02-25. "
@@ -925,9 +982,9 @@ def lpad():
     pause_wf_parser.add_argument(*state_args, **state_kwargs)
     pause_wf_parser.add_argument(*query_args, **query_kwargs)
     pause_wf_parser.add_argument('--password', help="Today's date, e.g. 2012-02-25. "
-                                                     "Password or positive response to input prompt "
-                                                     "required when modifying more than {} entries.".
-                                  format(PW_CHECK_NUM))
+                                                    "Password or positive response to input prompt "
+                                                    "required when modifying more than {} entries.".
+                                 format(PW_CHECK_NUM))
     pause_wf_parser.set_defaults(func=pause_wfs)
 
     reignite_wfs_parser = subparsers.add_parser('reignite_wflows',
@@ -998,6 +1055,8 @@ def lpad():
                                                       'at least this long (seconds)', type=int)
     fizzled_parser.add_argument('-q', '--query',
                                 help='restrict search to only FWs matching this query')
+    fizzled_parser.add_argument('-lq', '--launch_query',
+                                help='restrict search to only launches matching this query')
     fizzled_parser.set_defaults(func=detect_lostruns)
 
     priority_parser = subparsers.add_parser('set_priority', help='modify the priority of one or more FireWorks')
@@ -1011,11 +1070,13 @@ def lpad():
                                                     "Password or positive response to input prompt "
                                                     "required when modifying more than {} "
                                                     "entries.".format(PW_CHECK_NUM))
+    priority_parser.add_argument('-wf', action='store_true',
+                                 help='the priority will be set for all the fireworks of the matching workflows')
     priority_parser.set_defaults(func=set_priority)
 
     parser.add_argument('-l', '--launchpad_file', help='path to LaunchPad file containing '
                                                        'central DB connection info',
-                        default=LAUNCHPAD_LOC)
+                        default=None)
     parser.add_argument('-c', '--config_dir',
                         help='path to a directory containing the LaunchPad file (used if -l unspecified)',
                         default=CONFIG_FILE_DIR)
@@ -1025,9 +1086,11 @@ def lpad():
 
     webgui_parser = subparsers.add_parser('webgui', help='launch the web GUI')
     webgui_parser.add_argument("--port", dest="port", type=int, default=WEBSERVER_PORT,
-                        help="Port to run the web server on (default: 5000 or WEBSERVER_PORT arg in FW_config.yaml)")
+                               help="Port to run the web server on (default: 5000 or WEBSERVER_PORT arg in "
+                                    "FW_config.yaml)")
     webgui_parser.add_argument("--host", dest="host", type=str, default=WEBSERVER_HOST,
-                        help="Host to run the web server on (default: 127.0.0.1 or WEBSERVER_HOST arg in FW_config.yaml)")
+                               help="Host to run the web server on (default: 127.0.0.1 or WEBSERVER_HOST arg in "
+                                    "FW_config.yaml)")
     webgui_parser.add_argument('--debug', help='print debug messages', action='store_true')
     webgui_parser.add_argument('-s', '--server_mode', help='run in server mode (skip opening the browser)',
                                action='store_true')
@@ -1056,9 +1119,9 @@ def lpad():
     # admin commands
     admin_parser = subparsers.add_parser('admin', help='Various db admin commands, '
                                                        'type "lpad admin -h" for more.',
-                    parents=[parent_parser])
+                                         parents=[parent_parser])
     admin_subparser = admin_parser.add_subparsers(title="action",
-                    dest="action_command")
+                                                  dest="action_command")
 
     maintain_parser = admin_subparser.add_parser('maintain', help='Run database maintenance')
     maintain_parser.add_argument('--infinite', help='loop infinitely', action='store_true')
@@ -1067,8 +1130,8 @@ def lpad():
     maintain_parser.set_defaults(func=maintain)
 
     tuneup_parser = admin_subparser.add_parser('tuneup',
-                                          help='Tune-up the database (should be performed during '
-                                               'scheduled downtime)')
+                                               help='Tune-up the database (should be performed during '
+                                                    'scheduled downtime)')
     tuneup_parser.add_argument('--full', help='Run full tuneup and compaction (should be run during '
                                               'DB downtime only)', action='store_true')
     tuneup_parser.set_defaults(func=tuneup)
@@ -1138,12 +1201,13 @@ def lpad():
     else:
         if hasattr(args, "fw_id") and args.fw_id is not None and \
                 isinstance(args.fw_id, six.string_types):
-                if "," in args.fw_id:
-                    args.fw_id = [int(x) for x in args.fw_id.split(",")]
-                else:
-                    args.fw_id = [int(args.fw_id)]
+            if "," in args.fw_id:
+                args.fw_id = [int(x) for x in args.fw_id.split(",")]
+            else:
+                args.fw_id = [int(args.fw_id)]
 
         args.func(args)
+
 
 if __name__ == '__main__':
     lpad()

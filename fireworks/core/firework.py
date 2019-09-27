@@ -4,7 +4,6 @@ from __future__ import unicode_literals
 
 from copy import deepcopy
 
-
 """
 This module contains some of the most central FireWorks classes:
 
@@ -51,15 +50,27 @@ class FiretaskBase(defaultdict, FWSerializable):
 
     You can set parameters of a Firetask like you'd use a dict.
     """
-    # Specify required parameters with class variable. Consistency will be checked upon init.
-    required_params = []
+    required_params = None  # list of str of required parameters to check for consistency upon init
+
+    # if set to a list of str, only required and optional kwargs are allowed; consistency checked upon init
+    optional_params = None
 
     def __init__(self, *args, **kwargs):
         dict.__init__(self, *args, **kwargs)
 
-        for k in self.required_params:
+        required_params = self.required_params or []
+
+        for k in required_params:
             if k not in self:
-                raise ValueError("{}: Required parameter {} not specified!".format(self, k))
+                raise RuntimeError("{}: Required parameter {} not specified!".format(self, k))
+
+        if self.optional_params is not None:
+            allowed_params = required_params + self.optional_params
+            for k in kwargs:
+                if k not in allowed_params:
+                    raise RuntimeError(
+                        "Invalid keyword argument specified for: {}. You specified: {}. Allowed values are: {}.".format(
+                            self.__class__, k, allowed_params))
 
     @abc.abstractmethod
     def run_task(self, fw_spec):
@@ -187,7 +198,7 @@ class Firework(FWSerializable):
     A Firework is a workflow step and might be contain several Firetasks.
     """
 
-    STATE_RANKS = {'ARCHIVED': -2, 'FIZZLED': -1, 'DEFUSED': 0, 'PAUSED' : 0,
+    STATE_RANKS = {'ARCHIVED': -2, 'FIZZLED': -1, 'DEFUSED': 0, 'PAUSED': 0,
                    'WAITING': 1, 'READY': 2, 'RESERVED': 3, 'RUNNING': 4,
                    'COMPLETED': 5}
 
@@ -282,7 +293,7 @@ class Firework(FWSerializable):
         if self.state == 'FIZZLED':
             last_launch = self.launches[-1]
             if (EXCEPT_DETAILS_ON_RERUN and last_launch.action and
-                last_launch.action.stored_data.get('_exception', {}).get('_details')):
+                    last_launch.action.stored_data.get('_exception', {}).get('_details')):
                 # add the exception details to the spec
                 self.spec['_exception_details'] = last_launch.action.stored_data['_exception']['_details']
             else:
@@ -617,7 +628,7 @@ class Workflow(FWSerializable):
                     else:  # maybe it's a String?
                         try:
                             self[int(k)] = self[k]  # k must be int
-                        except:
+                        except Exception:
                             pass  # garbage input
                     del self[k]
 
@@ -680,7 +691,7 @@ class Workflow(FWSerializable):
             arguments
             """
             state = list(self.items())
-            return NestedClassGetter(), (Workflow, self.__class__.__name__, ), state
+            return NestedClassGetter(), (Workflow, self.__class__.__name__,), state
 
     def __init__(self, fireworks, links_dict=None, name=None, metadata=None, created_on=None,
                  updated_on=None, fw_states=None):
@@ -699,7 +710,7 @@ class Workflow(FWSerializable):
         links_dict = links_dict if links_dict else {}
 
         # main dict containing mapping of an id to a Firework object
-        self.id_fw = {}
+        self.id_fw = OrderedDict()
         for fw in fireworks:
             if fw.fw_id in self.id_fw:
                 raise ValueError('FW ids must be unique!')
@@ -739,7 +750,7 @@ class Workflow(FWSerializable):
         if fw_states:
             self.fw_states = fw_states
         else:
-            self.fw_states = {key:self.id_fw[key].state for key in self.id_fw}
+            self.fw_states = {key: self.id_fw[key].state for key in self.id_fw}
 
     @property
     def fws(self):
@@ -755,7 +766,7 @@ class Workflow(FWSerializable):
             state (str): state of workflow
         """
         m_state = 'READY'
-        #states = [fw.state for fw in self.fws]
+        # states = [fw.state for fw in self.fws]
         states = self.fw_states.values()
         leaf_fw_ids = self.leaf_fw_ids  # to save recalculating this
 
@@ -774,9 +785,9 @@ class Workflow(FWSerializable):
             for fizzled_id in fizzled_ids:
                 # If a fizzled fw is a leaf fw, then the workflow is fizzled
                 if (fizzled_id in leaf_fw_ids or
-                    # Otherwise all children must be ok with the fizzled parent
-                    not all(self.id_fw[child_id].spec.get('_allow_fizzled_parents', False)
-                            for child_id in self.links[fizzled_id])):
+                        # Otherwise all children must be ok with the fizzled parent
+                        not all(self.id_fw[child_id].spec.get('_allow_fizzled_parents', False)
+                                for child_id in self.links[fizzled_id])):
                     m_state = 'FIZZLED'
                     break
             else:
@@ -942,6 +953,10 @@ class Workflow(FWSerializable):
                         if m_launch.state == 'COMPLETED' and m_launch.action.mod_spec:
                             for mod in m_launch.action.mod_spec:
                                 apply_mod(mod, new_wf.id_fw[root_id].spec)
+
+        # set the FW state variable for all new fw ids to be WAITING
+        for new_fw in new_wf.fws:
+            self.fw_states[new_fw.fw_id] = 'WAITING'  # this should get updated by refresh() below
 
         for new_fw in new_wf.fws:
             updated_ids = self.refresh(new_fw.fw_id, set(updated_ids))

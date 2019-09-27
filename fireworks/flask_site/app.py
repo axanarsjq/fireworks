@@ -2,7 +2,7 @@ import json
 import os
 from functools import wraps
 
-from flask import Flask, render_template, request, jsonify, Response, make_response
+from flask import Flask, render_template, request, Response, make_response
 from flask import redirect, url_for, abort, flash, session
 from flask_paginate import Pagination
 from pymongo import DESCENDING
@@ -14,6 +14,7 @@ from fireworks.utilities.fw_utilities import get_fw_logger
 from fireworks.core.launchpad import LaunchPad
 from fireworks.fw_config import WEBSERVER_PERFWARNINGS
 import fireworks.flask_site.helpers as fwapp_util
+from fireworks.flask_site.util import jsonify
 
 app = Flask(__name__)
 app.use_reloader = True
@@ -73,6 +74,7 @@ def _addq_FW(q):
     return {
         "$and": [q, app.BASE_Q, session.get('fw_filt', {}), filt_from_wf]}
 
+
 def _addq_WF(q):
     filt_from_fw = {}
     if session.get('fw_filt'):
@@ -80,6 +82,7 @@ def _addq_WF(q):
             session.get('fw_filt'), app.lp)
     return {
         "$and": [q, app.BASE_Q_WF, session.get('wf_filt', {}), filt_from_fw]}
+
 
 @app.template_filter('datetime')
 def datetime(value):
@@ -114,10 +117,10 @@ def home():
     wf_nums = []
     for state in STATES:
         fw_nums.append(app.lp.get_fw_ids(query=_addq_FW({'state': state}),
-                                     count_only=True))
+                                         count_only=True))
         wf_nums.append(
             app.lp.get_wf_ids(query=_addq_WF({'state': state}),
-                          count_only=True))
+                              count_only=True))
     state_nums = zip(STATES, fw_nums, wf_nums)
 
     tot_fws = sum(fw_nums)
@@ -125,7 +128,7 @@ def home():
 
     # Newest Workflows table data
     wfs_shown = app.lp.workflows.find(_addq_WF({}), limit=PER_PAGE,
-                                  sort=[('_id', DESCENDING)])
+                                      sort=[('_id', DESCENDING)])
     wf_info = []
     for item in wfs_shown:
         wf_info.append({
@@ -134,15 +137,15 @@ def home():
             "state": item['state'],
             "fireworks": list(
                 app.lp.fireworks.find({"fw_id": {"$in": item["nodes"]}},
-                                  limit=PER_PAGE, sort=[('fw_id', DESCENDING)],
-                                  projection=["state", "name", "fw_id"]))
+                                      limit=PER_PAGE, sort=[('fw_id', DESCENDING)],
+                                      projection=["state", "name", "fw_id"]))
         })
 
     PLOTTING = False
     try:
         import matplotlib as mpl
-        PLOTTING=True
-    except:
+        PLOTTING = True
+    except Exception:
         pass
 
     return render_template('home.html', **locals())
@@ -166,7 +169,7 @@ def get_fw_details(fw_id):
 def fw_details(fw_id):
     try:
         int(fw_id)
-    except:
+    except Exception:
         raise ValueError("Invalid fw_id: {}".format(fw_id))
     fw = app.lp.get_fw_dict_by_id(fw_id)
     fw = json.loads(
@@ -196,7 +199,7 @@ def workflow_json(wf_id):
 
     wf = app.lp.workflows.find_one({'nodes': wf_id})
     fireworks = list(app.lp.fireworks.find({"fw_id": {"$in": wf["nodes"]}},
-                                       projection=["name", "fw_id", "state"]))
+                                           projection=["name", "fw_id", "state"]))
     nodes_and_edges = {'nodes': list(), 'edges': list()}
     for fw in fireworks:
         fw_id = fw['fw_id']
@@ -314,8 +317,7 @@ def wf_metadata_find(key, value, state):
             page = int(request.args.get('page', 1))
         except ValueError:
             page = 1
-        rows = list(db.find(q).sort([('_id', DESCENDING)]). \
-                    skip(page - 1).limit(PER_PAGE))
+        rows = list(db.find(q).sort([('_id', DESCENDING)]).skip(page - 1).limit(PER_PAGE))
         for r in rows:
             r["fw_id"] = r["nodes"][0]
         pagination = Pagination(page=page, total=wf_count,
@@ -346,10 +348,11 @@ def report(interval, num_intervals):
     try:
         import matplotlib as mpl
         PLOTTING = True
-    except:
+    except Exception:
         pass
 
     return render_template('report.html', **locals())
+
 
 @app.route('/dashboard/')
 @requires_auth
@@ -358,7 +361,7 @@ def dashboard():
     try:
         import matplotlib as mpl
         PLOTTING = True
-    except:
+    except Exception:
         pass
 
     return render_template('dashboard.html', **locals())
@@ -370,12 +373,12 @@ def parse_querystr(querystr, coll):
     try:
         d = json.loads(querystr)
         assert isinstance(d, dict)
-    except:
+    except Exception:
         flash("`{}` is not a valid JSON object / Python dict.".format(querystr))
         return {}
     try:
         h = coll.find_one(d)
-    except:
+    except Exception:
         flash("`{}` is not a valid MongoDB query doc.".format(querystr))
         return {}
     if WEBSERVER_PERFWARNINGS and not fwapp_util.uses_index(d, coll):
@@ -384,6 +387,7 @@ def parse_querystr(querystr, coll):
               "to the database collection "
               "to make it run faster.".format(querystr))
     return d
+
 
 @app.route("/reports/<coll>/<interval>/<num_intervals>/fig.png")
 def simple(coll, interval, num_intervals):
