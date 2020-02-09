@@ -43,7 +43,7 @@ class CommonAdapter(QueueAdapterBase):
         "MOAB": {"submit_cmd": "msub", "status_cmd": "showq"}
     }
 
-    def __init__(self, q_type, q_name=None, template_file=None, **kwargs):
+    def __init__(self, q_type, q_name=None, template_file=None, timeout=None, **kwargs):
         """
         :param q_type: The type of queue. Right now it should be either PBS,
                        SGE, SLURM, Cobalt or LoadLeveler.
@@ -52,6 +52,8 @@ class CommonAdapter(QueueAdapterBase):
                               None (the default) to use Fireworks' built-in
                               templates for PBS and SGE, which should work
                               on most queues.
+        :param timeout: The amount of seconds to wait before raising an error when
+                        checking the number of jobs in the queue. Default 5 seconds.
         :param **kwargs: Series of keyword args for queue parameters.
         """
         if q_type not in CommonAdapter.default_q_commands:
@@ -63,6 +65,7 @@ class CommonAdapter(QueueAdapterBase):
         self.template_file = os.path.abspath(template_file) if template_file is not None else \
             CommonAdapter._get_default_template_file(q_type)
         self.q_name = q_name or q_type
+        self.timeout = timeout or 5
         self.update(dict(kwargs))
 
         self.q_commands = copy.deepcopy(CommonAdapter.default_q_commands)
@@ -71,12 +74,10 @@ class CommonAdapter(QueueAdapterBase):
 
     def _parse_jobid(self, output_str):
         if self.q_type == "SLURM":
-            if isinstance(output_str, bytes):  # Py3 compatibility
-                output_str = output_str.decode('utf-8')
-            for l in output_str.split("\n"):
-                if l.startswith("Submitted batch job"):
-                    return int(l.split()[-1])
-        if self.q_type == "LoadLeveler":
+            # The line can contain more text after the id.
+            # Match after the standard "Submitted batch job" string
+            re_string = r"Submitted batch job\s+(\d+)"
+        elif self.q_type == "LoadLeveler":
             # Load Leveler: "llsubmit: The job "abc.123" has been submitted"
             re_string = r"The job \"(.*?)\" has been submitted"
         elif self.q_type == "Cobalt":
@@ -256,7 +257,7 @@ class CommonAdapter(QueueAdapterBase):
 
         # run qstat
         qstat = Command(self._get_status_cmd(username))
-        p = qstat.run(timeout=5)
+        p = qstat.run(timeout=self.timeout)
 
         # parse the result
         if p[0] == 0:
@@ -285,6 +286,7 @@ class CommonAdapter(QueueAdapterBase):
             d["_fw_q_name"] = self.q_name
         if self.template_file != CommonAdapter._get_default_template_file(self.q_type):
             d["_fw_template_file"] = self.template_file
+        d["_fw_timeout"] = self.timeout
         return d
 
     @classmethod
@@ -293,4 +295,5 @@ class CommonAdapter(QueueAdapterBase):
             q_type=m_dict["_fw_q_type"],
             q_name=m_dict.get("_fw_q_name"),
             template_file=m_dict.get("_fw_template_file"),
+            timeout=m_dict.get("_fw_timeout"),
             **{k: v for k, v in m_dict.items() if not k.startswith("_fw")})
